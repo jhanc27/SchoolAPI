@@ -4,7 +4,7 @@ using Application.DTOs.Periodo;
 using Application.DTOs.Reportes;
 using Application.Interfaces;
 using Domain.Entities;
-using Infrastructure.Data;
+using Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -16,28 +16,22 @@ namespace Application.Services
 {
     public class ReporteService : IReporteService
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IReporteRepository _reporteRepository;
 
-        public ReporteService(ApplicationDbContext context)
+        public ReporteService(IReporteRepository reporteRepository)
         {
-            _context = context;
+            _reporteRepository = reporteRepository;
         }
-
 
         public async Task<BoletinEstudianteDto?> GetBoletinEstudianteAsync(int estudianteId, int periodoId)
         {
-            var estudiante = await _context.Estudiantes.FindAsync(estudianteId);
+            var estudiante = await _reporteRepository.GetEstudianteByIdAsync(estudianteId);
             if (estudiante == null) return null;
 
-            var periodo = await _context.Periodos.FindAsync(periodoId);
+            var periodo = await _reporteRepository.GetPeriodoByIdAsync(periodoId);
             if (periodo == null) return null;
 
-            var inscripciones = await _context.Inscripciones
-                .Include(i => i.Materia).ThenInclude(m => m.Profesor)
-                .Include(i => i.Calificaciones)
-                .Where(i => i.EstudianteID == estudianteId && i.PeriodoID == periodoId)
-                .ToListAsync();
-
+            var inscripciones = await _reporteRepository.GetInscripcionesAsync(estudianteId, periodoId);
             if (!inscripciones.Any()) return null;
 
             var materias = inscripciones.Select(i => new MateriaConCalificacionesDto
@@ -45,8 +39,8 @@ namespace Application.Services
                 Materia = i.Materia.Nombre,
                 Profesor = $"{i.Materia.Profesor.Nombre} {i.Materia.Profesor.Apellido}",
                 Calificaciones = i.Calificaciones.Select(MapToCalificacionReadDto)
-                                               .OrderBy(c => c.FechaCreacion)
-                                               .ToList(),
+                                                .OrderBy(c => c.FechaCreacion)
+                                                .ToList(),
                 PromedioMateria = i.Calificaciones.Any() ? Math.Round(i.Calificaciones.Average(c => c.Nota ?? 0), 2) : 0m,
                 TotalCalificaciones = i.Calificaciones.Count()
             }).ToList();
@@ -62,48 +56,30 @@ namespace Application.Services
 
         public async Task<ResumenCursoDto?> GetResumenCursoAsync(int periodoId)
         {
-            var periodo = await _context.Periodos.FindAsync(periodoId);
+            var periodo = await _reporteRepository.GetPeriodoByIdAsync(periodoId);
             if (periodo == null) return null;
 
-            var resumenMateriasRaw = await _context.Calificaciones
-                .Include(c => c.Inscripcion).ThenInclude(i => i.Materia)
-                .Where(c => c.Inscripcion.PeriodoID == periodoId && c.Nota.HasValue)
+            var calificaciones = await _reporteRepository.GetCalificacionesPorPeriodoAsync(periodoId);
+            if (!calificaciones.Any()) return null;
+
+            var resumenMaterias = calificaciones
                 .GroupBy(c => c.Inscripcion.Materia.Nombre)
-                .Select(g => new
+                .Select(g => new ResumenMateriaDto
                 {
                     Materia = g.Key,
                     TotalEstudiantes = g.Select(c => c.Inscripcion.EstudianteID).Distinct().Count(),
                     TotalCalificaciones = g.Count(),
-                    PromedioNota = g.Average(c => (double)c.Nota!.Value),
-                    NotaMaxima = g.Max(c => c.Nota!.Value),
-                    NotaMinima = g.Min(c => c.Nota!.Value),
+                    PromedioNota = Math.Round((decimal)g.Average(c => c.Nota ?? 0), 2),
+                    NotaMaxima = g.Max(c => c.Nota ?? 0),
+                    NotaMinima = g.Min(c => c.Nota ?? 0),
                     LiteralesA = g.Count(c => c.Literal == LiteralCalificacion.A),
                     LiteralesB = g.Count(c => c.Literal == LiteralCalificacion.B),
                     LiteralesC = g.Count(c => c.Literal == LiteralCalificacion.C),
                     LiteralesF = g.Count(c => c.Literal == LiteralCalificacion.F),
-                    TotalAprobados = g.Count(c => c.Literal != LiteralCalificacion.F)
+                    PorcentajeAprobados = g.Count(c => c.Literal != LiteralCalificacion.F) * 100m / g.Count()
                 })
-                .OrderBy(m => m.Materia)
-                .ToListAsync();
-
-            if (!resumenMateriasRaw.Any()) return null;
-
-            var resumenMaterias = resumenMateriasRaw.Select(m => new ResumenMateriaDto
-            {
-                Materia = m.Materia,
-                TotalEstudiantes = m.TotalEstudiantes,
-                TotalCalificaciones = m.TotalCalificaciones,
-                PromedioNota = Math.Round((decimal)m.PromedioNota, 2),
-                NotaMaxima = m.NotaMaxima,
-                NotaMinima = m.NotaMinima,
-                LiteralesA = m.LiteralesA,
-                LiteralesB = m.LiteralesB,
-                LiteralesC = m.LiteralesC,
-                LiteralesF = m.LiteralesF,
-                PorcentajeAprobados = m.TotalCalificaciones > 0
-                    ? Math.Round((decimal)(m.TotalAprobados * 100.0 / m.TotalCalificaciones), 2)
-                    : 0m
-            }).ToList();
+                .OrderBy(r => r.Materia)
+                .ToList();
 
             return new ResumenCursoDto
             {
@@ -114,55 +90,34 @@ namespace Application.Services
                 {
                     TotalMaterias = resumenMaterias.Count,
                     TotalEstudiantes = resumenMaterias.Sum(r => r.TotalEstudiantes),
-                    PromedioGeneral = resumenMaterias.Any()
-                        ? Math.Round(resumenMaterias.Average(r => r.PromedioNota), 2)
-                        : 0m
+                    PromedioGeneral = resumenMaterias.Any() ? Math.Round(resumenMaterias.Average(r => r.PromedioNota), 2) : 0m
                 }
             };
         }
 
-
         public async Task<ReporteAsistenciaDiariaDto?> GetAsistenciaDiariaAsync(DateTime fecha)
         {
-            var raw = await _context.Asistencias
-                .Include(a => a.Inscripcion).ThenInclude(i => i.Estudiante)
-                .Include(a => a.Inscripcion).ThenInclude(i => i.Materia)
-                .Where(a => a.Fecha.Date == fecha.Date)
+            var asistencias = await _reporteRepository.GetAsistenciasPorFechaAsync(fecha);
+            if (!asistencias.Any()) return null;
+
+            var reporte = asistencias
                 .GroupBy(a => a.Inscripcion.Materia.Nombre)
-                .Select(g => new
+                .Select(g => new AsistenciaPorMateriaDto
                 {
                     Materia = g.Key,
                     TotalEstudiantes = g.Count(),
                     Asistieron = g.Count(a => a.Asistio),
                     Faltaron = g.Count(a => !a.Asistio),
-                    Detalles = g.Select(a => new
+                    PorcentajeAsistencia = g.Count() > 0 ? Math.Round((decimal)(g.Count(a => a.Asistio) * 100.0 / g.Count()), 2) : 0,
+                    Detalles = g.Select(a => new DetalleAsistenciaDto
                     {
                         Estudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
                         Matricula = a.Inscripcion.Estudiante.Matricula,
-                        Asistio = a.Asistio
-                    }).OrderBy(d => d.Estudiante)
+                        Asistio = a.Asistio ? "Sí" : "No"
+                    }).OrderBy(d => d.Estudiante).ToList()
                 })
                 .OrderBy(r => r.Materia)
-                .ToListAsync();
-
-            if (!raw.Any()) return null;
-
-            var reporte = raw.Select(r => new AsistenciaPorMateriaDto
-            {
-                Materia = r.Materia,
-                TotalEstudiantes = r.TotalEstudiantes,
-                Asistieron = r.Asistieron,
-                Faltaron = r.Faltaron,
-                PorcentajeAsistencia = r.TotalEstudiantes > 0
-                    ? Math.Round((decimal)(r.Asistieron * 100.0 / r.TotalEstudiantes), 2)
-                    : 0m,
-                Detalles = r.Detalles.Select(d => new DetalleAsistenciaDto
-                {
-                    Estudiante = d.Estudiante,
-                    Matricula = d.Matricula,
-                    Asistio = d.Asistio ? "Sí" : "No"
-                }).ToList()
-            }).ToList();
+                .ToList();
 
             return new ReporteAsistenciaDiariaDto
             {
@@ -177,69 +132,57 @@ namespace Application.Services
                     TotalFaltaron = reporte.Sum(r => r.Faltaron),
                     PorcentajeAsistenciaGeneral = reporte.Sum(r => r.TotalEstudiantes) > 0
                         ? Math.Round((decimal)(reporte.Sum(r => r.Asistieron) * 100.0 / reporte.Sum(r => r.TotalEstudiantes)), 2)
-                        : 0m
+                        : 0
                 }
             };
         }
 
         public async Task<RendimientoEstudianteDto?> GetRendimientoEstudianteAsync(int estudianteId)
         {
-            var estudiante = await _context.Estudiantes.FindAsync(estudianteId);
+            var estudiante = await _reporteRepository.GetEstudianteByIdAsync(estudianteId);
             if (estudiante == null) return null;
 
-            var historial = await _context.Inscripciones
-                .Include(i => i.Materia)
-                .Include(i => i.Periodo)
-                .Include(i => i.Calificaciones)
-                .Include(i => i.Asistencias)
-                .Where(i => i.EstudianteID == estudianteId)
-                .Select(i => new HistorialAcademicoDto
-                {
-                    Periodo = i.Periodo.NombrePeriodo,
-                    Materia = i.Materia.Nombre,
-                    PromedioNotas = i.Calificaciones.Any()
-                        ? Math.Round((decimal)i.Calificaciones.Average(c => c.Nota ?? 0), 2)
-                        : 0m,
-                    TotalCalificaciones = i.Calificaciones.Count(),
-                    PorcentajeAsistencia = i.Asistencias.Any()
-                        ? Math.Round((decimal)(i.Asistencias.Count(a => a.Asistio) * 100.0 / i.Asistencias.Count()), 2)
-                        : 0m,
-                    TotalClases = i.Asistencias.Count()
-                })
-                .OrderBy(r => r.Periodo)
-                .ThenBy(r => r.Materia)
-                .ToListAsync();
+            var historialInscripciones = await _reporteRepository.GetHistorialEstudianteAsync(estudianteId);
+
+            var historial = historialInscripciones.Select(i => new HistorialAcademicoDto
+            {
+                Periodo = i.Periodo.NombrePeriodo,
+                Materia = i.Materia.Nombre,
+                PromedioNotas = i.Calificaciones.Any() ? Math.Round((decimal)i.Calificaciones.Average(c => c.Nota ?? 0), 2) : 0m,
+                TotalCalificaciones = i.Calificaciones.Count(),
+                PorcentajeAsistencia = i.Asistencias.Any() ? Math.Round((decimal)(i.Asistencias.Count(a => a.Asistio) * 100.0 / i.Asistencias.Count), 2) : 0m,
+                TotalClases = i.Asistencias.Count
+            }).OrderBy(r => r.Periodo).ThenBy(r => r.Materia).ToList();
 
             return new RendimientoEstudianteDto
             {
                 Estudiante = MapToEstudianteReadDto(estudiante),
                 FechaGeneracion = DateTime.Now,
                 HistorialAcademico = historial,
-                ResumenGeneral = historial.Any() ? new ResumenRendimientoDto
-                {
-                    PromedioGeneral = Math.Round(historial.Average(r => r.PromedioNotas), 2),
-                    AsistenciaPromedio = Math.Round(historial.Average(r => r.PorcentajeAsistencia), 2),
-                    TotalMaterias = historial.Count
-                } : null
+                ResumenGeneral = historial.Any()
+                    ? new ResumenRendimientoDto
+                    {
+                        PromedioGeneral = Math.Round(historial.Average(r => r.PromedioNotas), 2),
+                        AsistenciaPromedio = Math.Round(historial.Average(r => r.PorcentajeAsistencia), 2),
+                        TotalMaterias = historial.Count
+                    }
+                    : null
             };
         }
 
         public async Task<EstadisticasGeneralesDto> GetEstadisticasGeneralesAsync()
         {
-            var totalEstudiantes = await _context.Estudiantes.CountAsync();
-            var estudiantesActivos = await _context.Estudiantes.CountAsync(e => e.Activo);
-            var totalProfesores = await _context.Profesores.CountAsync();
-            var totalMaterias = await _context.Materias.CountAsync();
-            var totalInscripciones = await _context.Inscripciones.CountAsync();
-            var periodosActivos = await _context.Periodos.CountAsync(p => p.Activo);
+            var totalEstudiantes = await _reporteRepository.GetTotalEstudiantesAsync();
+            var estudiantesActivos = await _reporteRepository.GetEstudiantesActivosAsync();
+            var totalProfesores = await _reporteRepository.GetTotalProfesoresAsync();
+            var totalMaterias = await _reporteRepository.GetTotalMateriasAsync();
+            var totalInscripciones = await _reporteRepository.GetTotalInscripcionesAsync();
+            var periodosActivos = await _reporteRepository.GetPeriodosActivosAsync();
+            var promedioGeneral = await _reporteRepository.GetPromedioGeneralCalificacionesAsync();
 
-            var promedioGeneral = await _context.Calificaciones.AnyAsync(c => c.Nota.HasValue)
-                ? await _context.Calificaciones.Where(c => c.Nota.HasValue).AverageAsync(c => c.Nota ?? 0)
-                : 0;
-
-            var porcentajeAsistencia = await _context.Asistencias.AnyAsync()
-                ? await _context.Asistencias.AverageAsync(a => a.Asistio ? 100.0 : 0.0)
-                : 0;
+            // Porcentaje asistencia promedio
+            var asistencias = await _reporteRepository.GetAsistenciasPorFechaAsync(DateTime.MinValue); // opcional, si quieres calcular porcentaje
+            decimal porcentajeAsistencia = asistencias.Any() ? Math.Round((decimal)(asistencias.Count(a => a.Asistio) * 100.0 / asistencias.Count), 2) : 0m;
 
             return new EstadisticasGeneralesDto
             {
@@ -249,37 +192,32 @@ namespace Application.Services
                 TotalMaterias = totalMaterias,
                 TotalInscripciones = totalInscripciones,
                 PeriodosActivos = periodosActivos,
-                PromedioGeneralSistema = Math.Round((decimal)promedioGeneral, 2),
-                PorcentajeAsistenciaGeneral = Math.Round((decimal)porcentajeAsistencia, 2)
+                PromedioGeneralSistema = Math.Round(promedioGeneral, 2),
+                PorcentajeAsistenciaGeneral = porcentajeAsistencia
             };
         }
 
         public async Task<IEnumerable<EstudianteConCalificacionesDto>> GetEstudiantesConCalificacionesAsync(int periodoId)
         {
-            return await _context.Estudiantes
-                .Include(e => e.Inscripciones.Where(i => i.PeriodoID == periodoId))
-                    .ThenInclude(i => i.Calificaciones)
-                .Where(e => e.Inscripciones.Any(i => i.PeriodoID == periodoId))
-                .Select(e => new EstudianteConCalificacionesDto
-                {
-                    EstudianteID = e.EstudianteID,
-                    Nombre = e.Nombre,
-                    Apellido = e.Apellido,
-                    Matricula = e.Matricula,
-                    Calificaciones = e.Inscripciones
-                        .Where(i => i.PeriodoID == periodoId)
-                        .SelectMany(i => i.Calificaciones)
-                        .Select(MapToCalificacionReadDto)
-                        .ToList()
-                })
-                .OrderBy(e => e.Apellido)
-                .ThenBy(e => e.Nombre)
-                .ToListAsync();
+            var estudiantes = await _reporteRepository.GetEstudiantesConCalificacionesPorPeriodoAsync(periodoId);
+
+            return estudiantes.Select(e => new EstudianteConCalificacionesDto
+            {
+                EstudianteID = e.EstudianteID,
+                Nombre = e.Nombre,
+                Apellido = e.Apellido,
+                Matricula = e.Matricula,
+                Calificaciones = e.Inscripciones
+                    .Where(i => i.PeriodoID == periodoId)
+                    .SelectMany(i => i.Calificaciones)
+                    .Select(MapToCalificacionReadDto)
+                    .ToList()
+            });
         }
 
-
+        // ---------------- Mapeos ----------------
         private EstudianteReadDto MapToEstudianteReadDto(Estudiante e) =>
-            new EstudianteReadDto
+            new()
             {
                 EstudianteID = e.EstudianteID,
                 Nombre = e.Nombre,
@@ -290,7 +228,7 @@ namespace Application.Services
             };
 
         private PeriodoReadDto MapToPeriodoReadDto(Periodo p) =>
-            new PeriodoReadDto
+            new()
             {
                 PeriodoID = p.PeriodoID,
                 NombrePeriodo = p.NombrePeriodo,
@@ -301,12 +239,12 @@ namespace Application.Services
             };
 
         private CalificacionReadDto MapToCalificacionReadDto(Calificacion c) =>
-            new CalificacionReadDto
+            new()
             {
                 CalificacionID = c.CalificacionID,
                 InscripcionID = c.InscripcionID,
                 Nota = c.Nota,
-                Literal = c.Literal,
+                Literal = c.Literal.ToString(),
                 FechaCreacion = c.FechaCreacion
             };
 

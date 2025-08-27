@@ -10,16 +10,18 @@ namespace Application.Interfaces
 {
     public interface ICalificacionService
     {
-        Task<IEnumerable<CalificacionReadDto>> GetCalificacionesByInscripcionAsync(int inscripcionId);
-        Task<IEnumerable<CalificacionReadDto>> GetCalificacionesByEstudianteAsync(int estudianteId);
-        Task<CalificacionReadDto?> GetCalificacionByIdAsync(int id);
-        Task<CalificacionReadDto> CreateCalificacionAsync(CalificacionCreateDto calificacionDto);
-        Task<bool> UpdateCalificacionAsync(int id, CalificacionUpdateDto calificacionDto);
-        Task<bool> DeleteCalificacionAsync(int id);
+      
+        
+           Task<IEnumerable<CalificacionReadDto>> GetCalificacionesByInscripcionAsync(int inscripcionId);
+           Task<IEnumerable<CalificacionReadDto>> GetCalificacionesByEstudianteAsync(int estudianteId);
+           Task<CalificacionReadDto?> GetCalificacionByIdAsync(int id);
+           Task<CalificacionReadDto> CreateCalificacionAsync(CalificacionCreateDto calificacionDto);
+           Task<bool> UpdateCalificacionAsync(int id, CalificacionUpdateDto calificacionDto);
+           Task<bool> DeleteCalificacionAsync(int id);
 
-        // Métodos de lógica de negocio
-        LiteralCalificacion CalcularLiteralPorNota(decimal nota);
-        decimal CalcularNotaPorLiteral(LiteralCalificacion literal);
-        bool ValidarConsistenciaNotaLiteral(decimal nota, LiteralCalificacion literal);
+           // Métodos de lógica de negocio
+           LiteralCalificacion CalcularLiteralPorNota(decimal nota);
+           decimal CalcularNotaPorLiteral(LiteralCalificacion literal);
+        
     }
 }

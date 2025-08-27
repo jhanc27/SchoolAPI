@@ -14,5 +14,15 @@ namespace Application.DTOs.Paginacion
         public int TotalPages { get; set; }
         public bool HasPrevious { get; set; }
         public bool HasNext { get; set; }
+
+        public PaginationMetadata(int totalRecords, int currentPage, int pageSize)
+        {
+            TotalRecords = totalRecords;
+            CurrentPage = currentPage;
+            PageSize = pageSize;
+            TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+            HasPrevious = currentPage > 1;
+            HasNext = currentPage < TotalPages;
+        }
     }
 }

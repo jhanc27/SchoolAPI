@@ -3,7 +3,7 @@ using Application.DTOs.Paginacion;
 using Application.DTOs.Reportes;
 using Application.Interfaces;
 using Domain.Entities;
-using Infrastructure.Data;
+using Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -15,113 +15,69 @@ namespace Application.Services
 {
     public class AsistenciaService : IAsistenciaService
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IAsistenciaRepository _repository;
 
-        public AsistenciaService(ApplicationDbContext context)
+        public AsistenciaService(IAsistenciaRepository repository)
         {
-            _context = context;
+            _repository = repository;
         }
 
-        // Nuevo método con paginación
         public async Task<(IEnumerable<AsistenciaReadDto> Data, PaginationMetadata Pagination)> GetAsistenciasAsync(
             DateTime? fecha = null, int? inscripcionId = null, int page = 1, int pageSize = 10)
         {
-            var query = _context.Asistencias
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Estudiante)
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Materia)
-                .AsQueryable();
+            var (asistencias, totalRecords) = await _repository.GetAsync(fecha, inscripcionId, page, pageSize);
 
-            if (fecha.HasValue)
-                query = query.Where(a => a.Fecha.Date == fecha.Value.Date);
-
-            if (inscripcionId.HasValue)
-                query = query.Where(a => a.InscripcionID == inscripcionId.Value);
-
-            var totalRecords = await query.CountAsync();
-
-            var data = await query
-                .OrderBy(a => a.Fecha)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .Select(a => new AsistenciaReadDto
-                {
-                    AsistenciaID = a.AsistenciaID,
-                    InscripcionID = a.InscripcionID,
-                    NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
-                    NombreMateria = a.Inscripcion.Materia.Nombre,
-                    Fecha = a.Fecha,
-                    Asistio = a.Asistio,
-                    FechaCreacion = a.FechaCreacion
-                })
-                .ToListAsync();
-
-            var pagination = new PaginationMetadata
+            var data = asistencias.Select(a => new AsistenciaReadDto
             {
-                CurrentPage = page,
-                PageSize = pageSize,
-                TotalRecords = totalRecords,
-                TotalPages = (int)Math.Ceiling((double)totalRecords / pageSize),
-                HasPrevious = page > 1,
-                HasNext = page < Math.Ceiling((double)totalRecords / pageSize)
-            };
+                AsistenciaID = a.AsistenciaID,
+                InscripcionID = a.InscripcionID,
+                NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
+                NombreMateria = a.Inscripcion.Materia.Nombre,
+                Fecha = a.Fecha,
+                Asistio = a.Asistio,
+                FechaCreacion = a.FechaCreacion
+            }).ToList();
+
+            var pagination = new PaginationMetadata(page, pageSize, totalRecords);
 
             return (data, pagination);
         }
 
         public async Task<IEnumerable<AsistenciaReadDto>> GetAsistenciasByInscripcionAsync(int inscripcionId)
         {
-            return await _context.Asistencias
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Estudiante)
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Materia)
-                .Where(a => a.InscripcionID == inscripcionId)
-                .OrderBy(a => a.Fecha)
-                .Select(a => new AsistenciaReadDto
-                {
-                    AsistenciaID = a.AsistenciaID,
-                    InscripcionID = a.InscripcionID,
-                    NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
-                    NombreMateria = a.Inscripcion.Materia.Nombre,
-                    Fecha = a.Fecha,
-                    Asistio = a.Asistio,
-                    FechaCreacion = a.FechaCreacion
-                })
-                .ToListAsync();
+            var asistencias = await _repository.GetByInscripcionAsync(inscripcionId);
+
+            return asistencias.Select(a => new AsistenciaReadDto
+            {
+                AsistenciaID = a.AsistenciaID,
+                InscripcionID = a.InscripcionID,
+                NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
+                NombreMateria = a.Inscripcion.Materia.Nombre,
+                Fecha = a.Fecha,
+                Asistio = a.Asistio,
+                FechaCreacion = a.FechaCreacion
+            });
         }
 
         public async Task<IEnumerable<AsistenciaReadDto>> GetAsistenciasByFechaAsync(DateTime fecha)
         {
-            return await _context.Asistencias
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Estudiante)
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Materia)
-                .Where(a => a.Fecha.Date == fecha.Date)
-                .Select(a => new AsistenciaReadDto
-                {
-                    AsistenciaID = a.AsistenciaID,
-                    InscripcionID = a.InscripcionID,
-                    NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
-                    NombreMateria = a.Inscripcion.Materia.Nombre,
-                    Fecha = a.Fecha,
-                    Asistio = a.Asistio,
-                    FechaCreacion = a.FechaCreacion
-                })
-                .ToListAsync();
+            var asistencias = await _repository.GetByFechaAsync(fecha);
+
+            return asistencias.Select(a => new AsistenciaReadDto
+            {
+                AsistenciaID = a.AsistenciaID,
+                InscripcionID = a.InscripcionID,
+                NombreEstudiante = $"{a.Inscripcion.Estudiante.Nombre} {a.Inscripcion.Estudiante.Apellido}",
+                NombreMateria = a.Inscripcion.Materia.Nombre,
+                Fecha = a.Fecha,
+                Asistio = a.Asistio,
+                FechaCreacion = a.FechaCreacion
+            });
         }
 
         public async Task<AsistenciaReadDto?> GetAsistenciaByIdAsync(int id)
         {
-            var a = await _context.Asistencias
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Estudiante)
-                .Include(a => a.Inscripcion)
-                    .ThenInclude(i => i.Materia)
-                .FirstOrDefaultAsync(a => a.AsistenciaID == id);
-
+            var a = await _repository.GetByIdAsync(id);
             if (a == null) return null;
 
             return new AsistenciaReadDto
@@ -138,11 +94,7 @@ namespace Application.Services
 
         public async Task<AsistenciaReadDto> CreateAsistenciaAsync(AsistenciaCreateDto dto)
         {
-            var inscripcion = await _context.Inscripciones.FindAsync(dto.InscripcionID);
-            if (inscripcion == null)
-                throw new InvalidOperationException($"No existe una inscripción con ID {dto.InscripcionID}");
-
-            if (await ExisteAsistenciaAsync(dto.InscripcionID, dto.Fecha))
+            if (await _repository.ExisteAsync(dto.InscripcionID, dto.Fecha))
                 throw new InvalidOperationException("Ya existe un registro de asistencia para esa fecha e inscripción");
 
             var a = new Asistencia
@@ -153,76 +105,79 @@ namespace Application.Services
                 FechaCreacion = DateTime.Now
             };
 
-            _context.Asistencias.Add(a);
-            await _context.SaveChangesAsync();
+            await _repository.AddAsync(a);
+            await _repository.SaveChangesAsync();
 
-            return await GetAsistenciaByIdAsync(a.AsistenciaID)
-                ?? throw new InvalidOperationException("Error al recuperar la asistencia creada");
+            var created = await GetAsistenciaByIdAsync(a.AsistenciaID);
+            if (created == null)
+                throw new InvalidOperationException("Error al recuperar la asistencia creada");
+
+            return created;
         }
 
         public async Task<bool> UpdateAsistenciaAsync(int id, AsistenciaUpdateDto dto)
         {
-            var a = await _context.Asistencias.FindAsync(id);
+            var a = await _repository.GetByIdAsync(id);
             if (a == null) return false;
 
-            if (await ExisteAsistenciaAsync(a.InscripcionID, dto.Fecha, id))
+            if (await _repository.ExisteAsync(a.InscripcionID, dto.Fecha, id))
                 throw new InvalidOperationException("Ya existe otro registro de asistencia para esa fecha");
 
             a.Fecha = dto.Fecha;
             a.Asistio = dto.Asistio;
 
-            await _context.SaveChangesAsync();
+            await _repository.UpdateAsync(a);
+            await _repository.SaveChangesAsync();
             return true;
         }
 
         public async Task<bool> DeleteAsistenciaAsync(int id)
         {
-            var a = await _context.Asistencias.FindAsync(id);
+            var a = await _repository.GetByIdAsync(id);
             if (a == null) return false;
 
-            _context.Asistencias.Remove(a);
-            await _context.SaveChangesAsync();
+            await _repository.DeleteAsync(a);
+            await _repository.SaveChangesAsync();
             return true;
         }
 
         public async Task<bool> ExisteAsistenciaAsync(int inscripcionId, DateTime fecha, int? excludeId = null)
         {
-            var q = _context.Asistencias
-                .Where(a => a.InscripcionID == inscripcionId && a.Fecha.Date == fecha.Date);
-
-            if (excludeId.HasValue)
-                q = q.Where(a => a.AsistenciaID != excludeId.Value);
-
-            return await q.AnyAsync();
+            return await _repository.ExisteAsync(inscripcionId, fecha, excludeId);
         }
 
         public async Task<ReporteAsistenciaDto> GetReporteAsistenciaAsync(int estudianteId, int materiaId)
         {
-            var inscripcion = await _context.Inscripciones
-                .Include(i => i.Estudiante)
-                .Include(i => i.Materia)
-                .FirstOrDefaultAsync(i => i.EstudianteID == estudianteId && i.MateriaID == materiaId);
+            // Obtiene todas las asistencias del estudiante
+            var asistenciasEstudiante = await _repository.GetByEstudianteAsync(estudianteId);
 
-            if (inscripcion == null)
+            // Busca si el estudiante está inscrito en la materia solicitada
+            var primeraAsistencia = asistenciasEstudiante
+                .FirstOrDefault(a => a.Inscripcion.MateriaID == materiaId);
+
+            if (primeraAsistencia == null)
                 throw new InvalidOperationException("No se encontró la inscripción especificada");
 
-            var asistencias = await _context.Asistencias
-                .Where(a => a.InscripcionID == inscripcion.InscripcionID)
-                .ToListAsync();
+            // Obtiene todas las asistencias de esa inscripción (no solo la primera)
+            var asistencias = await _repository.GetByInscripcionAsync(primeraAsistencia.InscripcionID);
 
-            var totalClases = asistencias.Count;
+            var totalClases = asistencias.Count();
             var clasesAsistidas = asistencias.Count(a => a.Asistio);
-            var porcentaje = totalClases > 0 ? Math.Round((clasesAsistidas * 100.0m / totalClases), 2) : 0;
+            var porcentaje = totalClases > 0
+                ? Math.Round((clasesAsistidas * 100.0m / totalClases), 2)
+                : 0;
 
             return new ReporteAsistenciaDto
             {
                 EstudianteID = estudianteId,
-                NombreEstudiante = $"{inscripcion.Estudiante.Nombre} {inscripcion.Estudiante.Apellido}",
-                NombreMateria = inscripcion.Materia.Nombre,
+                NombreEstudiante = $"{primeraAsistencia.Inscripcion.Estudiante.Nombre} {primeraAsistencia.Inscripcion.Estudiante.Apellido}",
+                NombreMateria = primeraAsistencia.Inscripcion.Materia.Nombre,
                 TotalClases = totalClases,
                 ClasesAsistidas = clasesAsistidas,
                 PorcentajeAsistencia = porcentaje
             };
         }
+
+      
     }
 }

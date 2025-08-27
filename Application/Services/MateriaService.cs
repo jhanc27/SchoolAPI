@@ -2,7 +2,7 @@
 using Application.DTOs.Paginacion;
 using Application.Interfaces;
 using Domain.Entities;
-using Infrastructure.Data;
+using Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -14,148 +14,120 @@ namespace Application.Services
 {
     public class MateriaService : IMateriaService
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IMateriaRepository _materiaRepository;
 
-        public MateriaService(ApplicationDbContext context)
+        public MateriaService(IMateriaRepository materiaRepository)
         {
-            _context = context;
+            _materiaRepository = materiaRepository;
         }
 
         public async Task<(IEnumerable<MateriaReadDto> Data, PaginationMetadata Pagination)> GetMateriasAsync(
-            string? filtro = null, int page = 1, int pageSize = 10)
+           string? filtro = null,
+           int page = 1,
+           int pageSize = 10)
         {
-            var query = _context.Materias
-                .Include(m => m.Profesor)
-                .AsQueryable();
+            var (materias, totalRecords) = await _materiaRepository.GetMateriasAsync(filtro, page, pageSize);
 
-            if (!string.IsNullOrWhiteSpace(filtro))
+            var materiaDtos = materias.Select(m => new MateriaReadDto
             {
-                filtro = $"%{filtro.ToLower()}%";
-                query = query.Where(m =>
-                    (m.Nombre != null && EF.Functions.Like(m.Nombre.ToLower(), filtro)) ||
-                    (m.Profesor != null && m.Profesor.Nombre != null && EF.Functions.Like(m.Profesor.Nombre.ToLower(), filtro)) ||
-                    (m.Profesor != null && m.Profesor.Apellido != null && EF.Functions.Like(m.Profesor.Apellido.ToLower(), filtro))
-                );
-            }
+                MateriaID = m.MateriaID,
+                Nombre = m.Nombre,
+                ProfesorID = m.ProfesorID,
+                NombreProfesor = $"{m.Profesor.Nombre} {m.Profesor.Apellido}",
+                FechaCreacion = m.FechaCreacion
+            }).ToList();
 
-            var totalRecords = await query.CountAsync();
+            // ✅ Usando el constructor con parámetros
+            var pagination = new PaginationMetadata(page, pageSize, totalRecords);
 
-            var materias = await query
-                .OrderBy(m => m.Nombre)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .Select(m => MapToReadDto(m))
-                .ToListAsync();
-
-            var pagination = new PaginationMetadata
-            {
-                CurrentPage = page,
-                PageSize = pageSize,
-                TotalRecords = totalRecords,
-                TotalPages = (int)Math.Ceiling((double)totalRecords / pageSize),
-                HasPrevious = page > 1,
-                HasNext = page < Math.Ceiling((double)totalRecords / pageSize)
-            };
-
-            return (materias, pagination);
+            return (materiaDtos, pagination);
         }
+
 
         public async Task<MateriaReadDto?> GetMateriaByIdAsync(int id)
         {
-            var materia = await _context.Materias
-                .Include(m => m.Profesor)
-                .FirstOrDefaultAsync(m => m.MateriaID == id);
+            var materia = await _materiaRepository.GetMateriaByIdAsync(id);
+            if (materia == null) return null;
 
-            return materia is null ? null : MapToReadDto(materia);
+            return new MateriaReadDto
+            {
+                MateriaID = materia.MateriaID,
+                Nombre = materia.Nombre,
+                ProfesorID = materia.ProfesorID,
+                NombreProfesor = $"{materia.Profesor.Nombre} {materia.Profesor.Apellido}",
+                FechaCreacion = materia.FechaCreacion
+            };
         }
 
         public async Task<MateriaReadDto> CreateMateriaAsync(MateriaCreateDto materiaDto)
         {
-            ValidarDatosMateria(materiaDto.Nombre, materiaDto.ProfesorID);
-
-            var profesor = await _context.Profesores.FindAsync(materiaDto.ProfesorID)
-                ?? throw new InvalidOperationException($"No existe un profesor con ID {materiaDto.ProfesorID}");
-
             var materia = new Materia
             {
-                Nombre = materiaDto.Nombre.Trim(),
+                Nombre = materiaDto.Nombre,
                 ProfesorID = materiaDto.ProfesorID,
-                FechaCreacion = DateTime.Now
+                FechaCreacion = DateTime.UtcNow,
+                Activo = true
             };
 
-            _context.Materias.Add(materia);
-            await _context.SaveChangesAsync();
+            await _materiaRepository.AddAsync(materia);
+            await _materiaRepository.SaveChangesAsync();
 
-            // Mapear y devolver
-            materia.Profesor = profesor;
-            return MapToReadDto(materia);
+            // Recargar materia incluyendo profesor
+            var materiaConProfesor = await _materiaRepository.GetMateriaByIdAsync(materia.MateriaID);
+
+            return new MateriaReadDto
+            {
+                MateriaID = materia.MateriaID,
+                Nombre = materia.Nombre,
+                ProfesorID = materia.ProfesorID,
+                NombreProfesor = materiaConProfesor?.Profesor != null
+                    ? $"{materiaConProfesor.Profesor.Nombre} {materiaConProfesor.Profesor.Apellido}"
+                    : string.Empty,
+                FechaCreacion = materia.FechaCreacion
+            };
         }
 
         public async Task<bool> UpdateMateriaAsync(int id, MateriaUpdateDto materiaDto)
         {
-            var materia = await _context.Materias.FindAsync(id);
+            var materia = await _materiaRepository.GetMateriaByIdAsync(id);
             if (materia == null) return false;
 
-            ValidarDatosMateria(materiaDto.Nombre, materiaDto.ProfesorID);
-
-            var profesor = await _context.Profesores.FindAsync(materiaDto.ProfesorID)
-                ?? throw new InvalidOperationException($"No existe un profesor con ID {materiaDto.ProfesorID}");
-
-            materia.Nombre = materiaDto.Nombre.Trim();
+            materia.Nombre = materiaDto.Nombre;
             materia.ProfesorID = materiaDto.ProfesorID;
 
-            await _context.SaveChangesAsync();
+            await _materiaRepository.UpdateAsync(materia);
+            await _materiaRepository.SaveChangesAsync();
+
             return true;
         }
 
         public async Task<(bool Success, string Message)> DeleteMateriaAsync(int id)
         {
-            var materia = await _context.Materias.FindAsync(id);
-            if (materia == null) return (false, "Materia no encontrada");
+            var materia = await _materiaRepository.GetMateriaByIdAsync(id);
+            if (materia == null)
+                return (false, "La materia no existe.");
 
-            var tieneInscripciones = await _context.Inscripciones.AnyAsync(i => i.MateriaID == id);
+            var tieneInscripciones = await _materiaRepository.HasInscripcionesAsync(id);
             if (tieneInscripciones)
-                return (false, "No se puede eliminar: la materia tiene inscripciones");
+                return (false, "No se puede eliminar la materia porque tiene inscripciones asociadas.");
 
-            _context.Materias.Remove(materia);
-            await _context.SaveChangesAsync();
-            return (true, "Materia eliminada exitosamente");
+            await _materiaRepository.DeleteAsync(materia);
+            await _materiaRepository.SaveChangesAsync();
+
+            return (true, "Materia eliminada correctamente.");
         }
 
         public async Task<IEnumerable<MateriaReadDto>> GetMateriasByProfesorAsync(int profesorId)
         {
-            var materias = await _context.Materias
-                .Include(m => m.Profesor)
-                .Where(m => m.ProfesorID == profesorId)
-                .ToListAsync();
+            var materias = await _materiaRepository.GetMateriasByProfesorAsync(profesorId);
 
-            return materias.Select(m => MapToReadDto(m));
-        }
-
-        // -------------------------- Helpers --------------------------
-
-        private MateriaReadDto MapToReadDto(Materia m) =>
-            new MateriaReadDto
+            return materias.Select(m => new MateriaReadDto
             {
                 MateriaID = m.MateriaID,
                 Nombre = m.Nombre,
                 ProfesorID = m.ProfesorID,
-                NombreProfesor = m.Profesor != null
-                    ? $"{m.Profesor.Nombre} {m.Profesor.Apellido}"
-                    : "Sin profesor",
-                FechaCreacion = m.FechaCreacion
-            };
-
-        private void ValidarDatosMateria(string nombre, int profesorId)
-        {
-            if (string.IsNullOrWhiteSpace(nombre))
-                throw new ArgumentException("El nombre de la materia es requerido y no puede estar vacío");
-
-            if (nombre.Length > 100)
-                throw new ArgumentException("El nombre no puede exceder 100 caracteres");
-
-            if (profesorId <= 0)
-                throw new ArgumentException("El ID del profesor debe ser mayor a 0");
+                NombreProfesor = $"{m.Profesor.Nombre} {m.Profesor.Apellido}"
+            }).ToList();
         }
     }
 }

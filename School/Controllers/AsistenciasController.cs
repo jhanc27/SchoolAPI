@@ -6,6 +6,7 @@ using Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.ComponentModel.DataAnnotations;
 
 namespace School.Controllers
 {
@@ -46,7 +47,7 @@ namespace School.Controllers
 
         // Obtener reporte de asistencia filtrado por estudiante y materia
         [HttpGet("reporte")]
-        public async Task<ActionResult<ReporteAsistenciaDto>> GetReporteAsistencia([FromQuery] int estudianteId, [FromQuery] int materiaId)
+        public async Task<ActionResult<ReporteAsistenciaDto>> GetReporteAsistencia([FromQuery, Required] int estudianteId, [FromQuery, Required] int materiaId)
         {
             var reporte = await _asistenciaService.GetReporteAsistenciaAsync(estudianteId, materiaId);
             return reporte is not null ? Ok(reporte) : NotFound();

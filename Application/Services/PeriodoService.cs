@@ -1,7 +1,7 @@
 ﻿using Application.DTOs.Periodo;
 using Application.Interfaces;
 using Domain.Entities;
-using Infrastructure.Data;
+using Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -13,112 +13,93 @@ namespace Application.Services
 {
     public class PeriodoService : IPeriodoService
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IPeriodoRepository _repository;
 
-        public PeriodoService(ApplicationDbContext context)
+        public PeriodoService(IPeriodoRepository repository)
         {
-            _context = context;
+            _repository = repository;
         }
 
         public async Task<IEnumerable<PeriodoReadDto>> GetPeriodosAsync()
         {
-            var periodos = await _context.Periodos
-                .Where(p => p.Activo)
-                .OrderByDescending(p => p.FechaInicio)
-                .ToListAsync();
-
+            var periodos = await _repository.GetPeriodosActivosAsync();
             return periodos.Select(MapToReadDto);
         }
 
         public async Task<PeriodoReadDto?> GetPeriodoActivoAsync()
         {
-            var periodo = await _context.Periodos.FirstOrDefaultAsync(p => p.Activo);
+            var periodo = await _repository.GetPeriodoActivoAsync();
             return periodo is null ? null : MapToReadDto(periodo);
         }
 
         public async Task<PeriodoReadDto?> GetPeriodoByIdAsync(int id)
         {
-            var periodo = await _context.Periodos.FirstOrDefaultAsync(p => p.PeriodoID == id);
+            var periodo = await _repository.GetPeriodoByIdAsync(id);
             return periodo is null ? null : MapToReadDto(periodo);
         }
 
-        public async Task<PeriodoReadDto> CreatePeriodoAsync(PeriodoCreateDto periodoDto)
+        public async Task<PeriodoReadDto> CreatePeriodoAsync(PeriodoCreateDto dto)
         {
-            ValidarDatosPeriodo(periodoDto.NombrePeriodo, periodoDto.FechaInicio, periodoDto.FechaFin);
+            ValidarDatosPeriodo(dto.NombrePeriodo, dto.FechaInicio, dto.FechaFin);
 
-            if (!await ValidarFechasPeriodoAsync(periodoDto.FechaInicio, periodoDto.FechaFin))
+            if (!await _repository.ExisteSuperposicionAsync(dto.FechaInicio, dto.FechaFin))
                 throw new InvalidOperationException("Las fechas se superponen con otro período existente");
 
             var periodo = new Periodo
             {
-                NombrePeriodo = periodoDto.NombrePeriodo.Trim(),
-                FechaInicio = periodoDto.FechaInicio,
-                FechaFin = periodoDto.FechaFin,
-                Activo = periodoDto.Activo,
+                NombrePeriodo = dto.NombrePeriodo.Trim(),
+                FechaInicio = dto.FechaInicio,
+                FechaFin = dto.FechaFin,
+                Activo = dto.Activo,
                 FechaCreacion = DateTime.Now
             };
 
-            _context.Periodos.Add(periodo);
-            await _context.SaveChangesAsync();
-
+            await _repository.AddPeriodoAsync(periodo);
             return MapToReadDto(periodo);
         }
 
-        public async Task<bool> UpdatePeriodoAsync(int id, PeriodoUpdateDto periodoDto)
+        public async Task<bool> UpdatePeriodoAsync(int id, PeriodoUpdateDto dto)
         {
-            var periodo = await _context.Periodos.FindAsync(id);
+            var periodo = await _repository.GetPeriodoByIdAsync(id);
             if (periodo == null) return false;
 
-            ValidarDatosPeriodo(periodoDto.NombrePeriodo, periodoDto.FechaInicio, periodoDto.FechaFin);
+            ValidarDatosPeriodo(dto.NombrePeriodo, dto.FechaInicio, dto.FechaFin);
 
-            if (!await ValidarFechasPeriodoAsync(periodoDto.FechaInicio, periodoDto.FechaFin, id))
+            if (!await _repository.ExisteSuperposicionAsync(dto.FechaInicio, dto.FechaFin, id))
                 throw new InvalidOperationException("Las fechas se superponen con otro período existente");
 
-            periodo.NombrePeriodo = periodoDto.NombrePeriodo.Trim();
-            periodo.FechaInicio = periodoDto.FechaInicio;
-            periodo.FechaFin = periodoDto.FechaFin;
-            periodo.Activo = periodoDto.Activo;
+            periodo.NombrePeriodo = dto.NombrePeriodo.Trim();
+            periodo.FechaInicio = dto.FechaInicio;
+            periodo.FechaFin = dto.FechaFin;
+            periodo.Activo = dto.Activo;
 
-            await _context.SaveChangesAsync();
+            await _repository.UpdatePeriodoAsync(periodo);
             return true;
         }
 
         public async Task<bool> ValidarFechasPeriodoAsync(DateTime fechaInicio, DateTime fechaFin, int? excludeId = null)
         {
-            var query = _context.Periodos.Where(p => p.Activo);
-
-            if (excludeId.HasValue)
-                query = query.Where(p => p.PeriodoID != excludeId.Value);
-
-            var periodosSuperpuestos = await query
-                .Where(p => (fechaInicio >= p.FechaInicio && fechaInicio <= p.FechaFin) ||
-                            (fechaFin >= p.FechaInicio && fechaFin <= p.FechaFin) ||
-                            (fechaInicio <= p.FechaInicio && fechaFin >= p.FechaFin))
-                .AnyAsync();
-
-            return !periodosSuperpuestos;
+            return !await _repository.ExisteSuperposicionAsync(fechaInicio, fechaFin, excludeId);
         }
 
         public async Task<bool> DesactivarPeriodosAnterioresAsync(int periodoId)
         {
-            var periodosAnteriores = await _context.Periodos
-                .Where(p => p.PeriodoID != periodoId && p.Activo)
-                .ToListAsync();
-
+            var periodosAnteriores = await _repository.GetPeriodosAnterioresAsync(periodoId);
             foreach (var p in periodosAnteriores)
                 p.Activo = false;
 
-            await _context.SaveChangesAsync();
+            foreach (var p in periodosAnteriores)
+                await _repository.UpdatePeriodoAsync(p);
+
             return true;
         }
 
         public async Task<bool> DeletePeriodoAsync(int periodoId)
         {
-            var periodo = await _context.Periodos.FindAsync(periodoId);
+            var periodo = await _repository.GetPeriodoByIdAsync(periodoId);
             if (periodo == null) return false;
 
-            _context.Periodos.Remove(periodo);
-            await _context.SaveChangesAsync();
+            await _repository.DeletePeriodoAsync(periodo);
             return true;
         }
 

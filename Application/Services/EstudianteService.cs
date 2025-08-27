@@ -2,7 +2,7 @@
 using Application.DTOs.Paginacion;
 using Application.Interfaces;
 using Domain.Entities;
-using Infrastructure.Data;
+using Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -15,75 +15,38 @@ namespace Application.Services
 {
     public class EstudianteService : IEstudianteService
     {
-        private readonly ApplicationDbContext _context;
+        private readonly IEstudianteRepository _repository;
 
-        public EstudianteService(ApplicationDbContext context)
+        public EstudianteService(IEstudianteRepository repository)
         {
-            _context = context;
+            _repository = repository;
         }
 
         public async Task<(IEnumerable<EstudianteReadDto> Data, PaginationMetadata Pagination)> GetEstudiantesAsync(
             string? filtro = null, int page = 1, int pageSize = 10)
         {
-            var query = _context.Estudiantes.Where(e => e.Activo);
-
-            if (!string.IsNullOrWhiteSpace(filtro))
-            {
-                filtro = filtro.ToLower();
-                query = query.Where(e =>
-                    (e.Nombre != null && e.Nombre.ToLower().Contains(filtro)) ||
-                    (e.Apellido != null && e.Apellido.ToLower().Contains(filtro)) ||
-                    (e.Matricula != null && e.Matricula.ToLower().Contains(filtro))
-                );
-            }
-
-            var totalRecords = await query.CountAsync();
-
-            var estudiantes = await query
-                .OrderBy(e => e.Apellido)
-                .ThenBy(e => e.Nombre)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .Select(e => new EstudianteReadDto
-                {
-                    EstudianteID = e.EstudianteID,
-                    Nombre = e.Nombre,
-                    Apellido = e.Apellido,
-                    Matricula = e.Matricula,
-                    FechaCreacion = e.FechaCreacion,
-                    Activo = e.Activo
-                })
-                .ToListAsync();
-
+            var estudiantes = await _repository.GetAllAsync(filtro, page, pageSize);
+            var totalRecords = await _repository.CountAsync(filtro);
             var totalPages = (int)Math.Ceiling((double)totalRecords / pageSize);
 
-            var pagination = new PaginationMetadata
-            {
-                CurrentPage = page,
-                PageSize = pageSize,
-                TotalRecords = totalRecords,
-                TotalPages = totalPages,
-                HasPrevious = page > 1,
-                HasNext = page < totalPages
-            };
+            var pagination = new PaginationMetadata(page, pageSize, totalRecords);
 
-            return (estudiantes, pagination);
+            var data = estudiantes.Select(MapToReadDto);
+
+            return (data, pagination);
         }
 
         public async Task<EstudianteReadDto?> GetEstudianteByIdAsync(int id)
         {
-            var estudiante = await _context.Estudiantes.FindAsync(id);
-
-            if (estudiante == null) return null;
-
-            return MapToReadDto(estudiante);
+            var estudiante = await _repository.GetByIdAsync(id);
+            return estudiante is null ? null : MapToReadDto(estudiante);
         }
 
         public async Task<EstudianteReadDto> CreateEstudianteAsync(EstudianteCreateDto dto)
         {
             ValidarDatosEstudiante(dto.Nombre, dto.Apellido, dto.Matricula);
 
-            if (await ExisteMatriculaAsync(dto.Matricula))
+            if (await _repository.ExisteMatriculaAsync(dto.Matricula))
                 throw new InvalidOperationException("Ya existe un estudiante con esa matrícula");
 
             var estudiante = new Estudiante
@@ -95,20 +58,18 @@ namespace Application.Services
                 Activo = true
             };
 
-            _context.Estudiantes.Add(estudiante);
-            await _context.SaveChangesAsync();
-
+            await _repository.AddAsync(estudiante);
             return MapToReadDto(estudiante);
         }
 
         public async Task<bool> UpdateEstudianteAsync(int id, EstudianteUpdateDto dto)
         {
-            var estudiante = await _context.Estudiantes.FindAsync(id);
+            var estudiante = await _repository.GetByIdAsync(id);
             if (estudiante == null) return false;
 
             ValidarDatosEstudiante(dto.Nombre, dto.Apellido, dto.Matricula);
 
-            if (await ExisteMatriculaAsync(dto.Matricula, id))
+            if (await _repository.ExisteMatriculaAsync(dto.Matricula, id))
                 throw new InvalidOperationException("Ya existe otro estudiante con esa matrícula");
 
             estudiante.Nombre = dto.Nombre.Trim();
@@ -116,62 +77,53 @@ namespace Application.Services
             estudiante.Matricula = dto.Matricula.Trim().ToUpper();
             estudiante.Activo = dto.Activo;
 
-            await _context.SaveChangesAsync();
+            await _repository.UpdateAsync(estudiante);
             return true;
         }
 
         public async Task<(bool Success, string Message, bool SoftDelete)> DeleteEstudianteAsync(int id)
         {
-            var estudiante = await _context.Estudiantes.FindAsync(id);
+            var estudiante = await _repository.GetByIdAsync(id);
             if (estudiante == null) return (false, "Estudiante no encontrado", false);
 
-            var tieneInscripciones = await _context.Inscripciones.AnyAsync(i => i.EstudianteID == id);
-            var tieneCalificaciones = await _context.Calificaciones.AnyAsync(c => c.Inscripcion.EstudianteID == id);
+            var tieneInscripciones = await _repository.TieneInscripcionesAsync(id);
+            var tieneCalificaciones = await _repository.TieneCalificacionesAsync(id);
 
             if (tieneInscripciones || tieneCalificaciones)
             {
                 estudiante.Activo = false;
-                await _context.SaveChangesAsync();
-                return (true, "Estudiante desactivado exitosamente (tiene inscripciones/calificaciones)", true);
+                await _repository.UpdateAsync(estudiante);
+                return (true, "Estudiante desactivado (tiene inscripciones/calificaciones)", true);
             }
             else
             {
-                _context.Estudiantes.Remove(estudiante);
-                await _context.SaveChangesAsync();
+                await _repository.DeleteAsync(estudiante);
                 return (true, "Estudiante eliminado exitosamente", false);
             }
         }
 
         public async Task<bool> ExisteMatriculaAsync(string matricula, int? excludeId = null)
         {
-            var query = _context.Estudiantes.Where(e => e.Matricula == matricula.Trim().ToUpper());
-            if (excludeId.HasValue)
-                query = query.Where(e => e.EstudianteID != excludeId.Value);
-
-            return await query.AnyAsync();
+            return await _repository.ExisteMatriculaAsync(matricula, excludeId);
         }
 
         private void ValidarDatosEstudiante(string nombre, string apellido, string matricula)
         {
             if (string.IsNullOrWhiteSpace(nombre))
                 throw new ArgumentException("El nombre es requerido y no puede estar vacío");
-
             if (string.IsNullOrWhiteSpace(apellido))
                 throw new ArgumentException("El apellido es requerido y no puede estar vacío");
-
             if (string.IsNullOrWhiteSpace(matricula))
                 throw new ArgumentException("La matrícula es requerida y no puede estar vacía");
 
             if (nombre.Length > 100)
                 throw new ArgumentException("El nombre no puede exceder 100 caracteres");
-
             if (apellido.Length > 100)
                 throw new ArgumentException("El apellido no puede exceder 100 caracteres");
-
             if (matricula.Length > 20)
                 throw new ArgumentException("La matrícula no puede exceder 20 caracteres");
 
-            if (!Regex.IsMatch(matricula, @"^[A-Za-z0-9\-]+$"))
+            if (!System.Text.RegularExpressions.Regex.IsMatch(matricula, @"^[A-Za-z0-9\-]+$"))
                 throw new ArgumentException("La matrícula solo puede contener letras, números y guiones");
         }
 

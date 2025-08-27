@@ -1,5 +1,6 @@
 ﻿using Application.DTOs.Calificacion;
 using Application.Interfaces;
+using Application.Services;
 using Domain.Entities;
 using Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
@@ -10,7 +11,7 @@ namespace School.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class CalificacionesController : ControllerBase
+    public class CalificacionesController : ControllerBase  
     {
         private readonly ICalificacionService _calificacionService;
 
@@ -56,12 +57,7 @@ namespace School.Controllers
             return Ok(nota);
         }
 
-        [HttpGet("validar-consistencia")]
-        public ActionResult<bool> ValidarConsistenciaNotaLiteral(decimal nota, LiteralCalificacion literal)
-        {
-            var valido = _calificacionService.ValidarConsistenciaNotaLiteral(nota, literal);
-            return Ok(valido);
-        }
+    
 
         [HttpPost]
         public async Task<ActionResult<CalificacionReadDto>> CreateCalificacion([FromBody] CalificacionCreateDto dto)

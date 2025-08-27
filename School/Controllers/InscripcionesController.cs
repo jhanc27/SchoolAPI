@@ -19,11 +19,19 @@ namespace School.Controllers
             _inscripcionService = inscripcionService;
         }
 
-        // Obtener todas las inscripciones
+        // Obtener todas las inscripciones con paginación opcional
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<InscripcionReadDto>>> GetInscripciones()
+        public async Task<ActionResult<IEnumerable<InscripcionReadDto>>> GetInscripciones(
+            int page = 1, int pageSize = 10)
         {
-            var data = await _inscripcionService.GetInscripcionesAsync();
+            var (data, pagination) = await _inscripcionService.GetInscripcionesAsync(page: page, pageSize: pageSize);
+
+            // Incluir metadatos de paginación en headers
+            Response.Headers["X-Pagination-TotalRecords"] = pagination.TotalRecords.ToString();
+            Response.Headers["X-Pagination-PageSize"] = pagination.PageSize.ToString();
+            Response.Headers["X-Pagination-CurrentPage"] = pagination.CurrentPage.ToString();
+            Response.Headers["X-Pagination-TotalPages"] = pagination.TotalPages.ToString();
+
             return Ok(data);
         }
 
